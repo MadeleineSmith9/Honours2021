@@ -1,0 +1,264 @@
+library(edgeR)
+library(limma)
+library(Glimma)
+library(gplots)
+library(org.Mm.eg.db)
+library(RColorBrewer)
+library(dplyr)
+library(ggplot2)
+library(ggrepel)
+library(ReactomePA)
+library(dendextend)
+library(tidyverse)
+library(ggpubr)
+library(ggfortify)
+library(eulerr)
+library(patchwork)
+library(dplyr)
+library(gridExtra)
+library(pheatmap)
+library(readxl)
+library(readr)
+library(ggdendro)
+library(HGNChelper)
+library(clusterProfiler)
+library(reshape)
+
+setwd("C:/Users/maddy/Dropbox (Sydney Uni Student)/Results/Honours/Bioinformatics")
+
+#load samples object
+samples <- read_excel("Samples_cleaned.xlsx")
+
+#change samples object to a dataframe
+samples <- as.data.frame(samples)
+
+#load gene annotation file
+genes <- read_csv("genes.csv")
+names(genes)[1] <- "ENSEMBL"
+
+#change genes object to a dataframe
+genes <- as.data.frame(genes)
+
+#load counts file 
+counts <- read_excel("GSE159356_HTseq_counts.xlsx")
+
+#change counts object to a dataframe
+counts <- as.data.frame(counts)
+
+#change first column to row names of the counts object
+rownames(counts) <- counts$...1
+
+#remove the first column in the counts object as it is not needed
+counts <- counts[-1]
+
+#convert counts into a matrix 
+counts <- as.matrix(counts)
+#print a summary of Genes not in your Counts file
+summary(rownames(counts) %in% genes$ENSEMBL)
+
+#Make the counts object only have genes with genes in the Genes object
+counts<-counts[rownames(counts) %in% genes$ENSEMBL,]
+
+#make unique lookup for annotation based on counts object
+m<-match(rownames(counts),genes$ENSEMBL)
+
+#match your counts and your Genes object
+genes<-data.frame(genes[m,],row.names=1)
+
+### check that the rownames now match = should be all TRUE
+summary(rownames(genes) == rownames(counts))
+
+#make a counts per million object
+mycpm <- cpm(counts)
+
+#make DGEList object
+d = DGEList(counts = counts, group = samples$Vector, samples=samples, genes=genes)
+
+#filtration
+keep.exprs <- filterByExpr(d, group="Vector")
+d <- d[keep.exprs,, keep.lib.sizes=FALSE]
+
+#noramlisation 
+d <- calcNormFactors(d)
+
+#create a log CPM object from filtered and normalised counts
+logcpm <- cpm(d, log=TRUE)
+
+#AFTER: making a matrix of the genes and then creating columns for each value (ie sample info)
+thematrix <- logcpm %>%
+  as.data.frame() %>%
+  rownames_to_column() %>%
+  gather(Sample, log2cpm, -rowname)
+
+#AFTER: merge the new matrix with the samples info
+mdata <- merge(thematrix, samples, by = c("Sample"))
+newdata <- mdata
+
+#set colour palette  
+cbPalette <- c("#0072B2", "#56B4E9", "#E69F00",  "#D55E00", "#009E73")
+
+#create boxplots for AFTER data
+afternorm <- newdata %>% 
+  group_by(Vector, Sample) %>% 
+  mutate(med=median(log2cpm)) %>% 
+  ungroup() %>%
+  arrange(Vector,med) %>% 
+  mutate(Number=factor(Sample,levels=unique(Sample))) %>%
+  ggplot(aes(x = Sample, y = log2cpm, fill = Vector)) + geom_boxplot(outlier.fill = "green") +
+  stat_summary(fun="mean", color="white") +   theme(legend.position = "none", text = element_text(size=15),axis.text.x = element_text(angle=90, hjust=1)) + 
+  geom_hline(yintercept=median(newdata$log2cpm),color = "red") + scale_fill_manual(values=cbPalette)
+
+
+#BEFORE
+unfiltered = DGEList(counts = counts, group = samples$Vector, samples=samples, genes=genes)
+unfilteredlogcpm <- cpm(unfiltered, log=TRUE)
+
+#BEFORE: making a matrix of the genes and then creating columns for each value (ie sample info) before norm
+unfiltthematrix <- unfilteredlogcpm %>%
+  as.data.frame() %>%
+  rownames_to_column() %>%
+  gather(Sample, log2cpm, -rowname)
+
+#BEFORE: merge the new matrix with the samples info
+unfilmdata <- merge(unfiltthematrix, samples, by = c("Sample"))
+
+#create boxplots for BEFORE data
+beforenorm <- unfilmdata %>% 
+  group_by(Vector, Sample) %>% 
+  mutate(med=median(log2cpm)) %>% 
+  ungroup() %>%
+  arrange(Vector, med) %>% 
+  mutate(Sample=factor(Sample,levels=unique(Sample))) %>%
+  ggplot(aes(x= Sample, y = log2cpm, fill = Vector)) + geom_boxplot(outlier.fill = "green") +
+  stat_summary(fun="mean", color="white") +   theme(legend.position = "none",text = element_text(size=15),axis.text.x = element_text(angle=90, hjust=1)) + 
+  geom_hline(yintercept=median(unfilmdata$log2cpm),color = "red") + scale_fill_manual(values=cbPalette)
+
+#plot BEFORE and AFTER boxplots side-by-side
+ggarrange(beforenorm, afternorm,
+          labels = c("A", "B"),
+          ncol = 2)
+
+
+#Hierarchical clustering and dendogram
+matrixdist <- dist(t(d$counts), method = "euclidean")
+cluster <- hclust(matrixdist)
+ggdendrogram(cluster) + scale_color_manual(values=c("#0072B2", "#56B4E9", "#E69F00",  "#D55E00", "#009E73")) + ggtitle("Sample Clustering Dendrogram") + theme(plot.title = element_text(hjust=0.5,face="bold"))
+
+
+#Prinipal components analysis and plot
+project.pca <- prcomp(t(logcpm))
+new <- plot(project.pca)
+pca <- autoplot(project.pca, data = samples ,colour ="Vector", size = 3) + scale_colour_manual(values = c("#0072B2", "#56B4E9", "#E69F00",  "#D55E00", "#009E73"),
+                                                                                               name = "Vector", labels = c("HDR Cleaved", "HDR Uncleaved","Non-Cognate Donor", "Non-Cognate Guide", "PBS")) +
+  ggtitle("Principal Component Analysis") + ggtitle("Principal Component Analysis Plot") + 
+  theme(plot.title = element_text(hjust=0.5,face="bold"))
+
+#Variance Histogram
+varExp = (100*project.pca$sdev^2)/sum(project.pca$sdev^2)
+varDF = data.frame(Dimensions=1:length(varExp),
+                   varExp=varExp)
+
+
+hist <- ggplot(varDF,aes(x=Dimensions,y=varExp)) +
+  geom_col(fill = "#999999") +
+  theme_gray() + ylim(c(0,42)) + ylab("% variance explained")+ 
+  ggtitle("Variance Histogram") + theme(plot.title = element_text(hjust=0.5,face="bold"))
+
+#PLotting Variance histogram and PCA side-by-side
+ggarrange(hist, pca+ rremove("x.text"),
+          labels = c("A", "B"), widths = c(1, 2),
+          ncol = 2, align="hv")
+
+
+#DGE for Cleaved vs Uncleaved
+samples$Vectornames <- c("PBS","PBS","PBS","GuideScram", "GuideScram", "GuideScram", "DonorScram", "DonorScram", "DonorScram", "Uncleaved", "Uncleaved", "Uncleaved", "Uncleaved", "Uncleaved", "Uncleaved", "Uncleaved", "Uncleaved", "Uncleaved", "Uncleaved", "Cleaved", "Cleaved", "Cleaved", "Cleaved", "Cleaved", "Cleaved", "Cleaved", "Cleaved", "Cleaved", "Cleaved")
+cond=paste0(samples$Vectornames)
+
+
+design=model.matrix(~0 + cond, data = samples)
+y<-estimateDisp(d,design)
+fit <- glmQLFit(y, design)
+
+
+#contrast matrix 
+CleUn<-makeContrasts(condCleaved-condUncleaved, levels=design)
+
+
+#comparing everything
+qlfCleUn<-glmQLFTest(fit, contrast = CleUn)
+resultsCleUn <- topTags(qlfCleUn, n=10000, adjust.method = "BH",p.value = 0.05)
+
+
+#getting direction for the DEGs
+mygenes <- as.data.frame(resultsCleUn)
+mygenes$direction=ifelse(mygenes$logFC>0,"up","down")
+
+
+#universe
+CleUntt<-data.frame(topTags(qlfCleUn,n=2000000))
+CleUntt$direction=ifelse(CleUntt$logFC>0,"up","down")
+CleUntt$threshold <- ifelse(CleUntt$FDR<0.05, "TRUE", "FALSE")
+
+#Volcano plot for Cleaved vs Uncleaved
+data <- CleUntt %>% mutate(Expression = case_when(logFC >= 0 & FDR <= 0.05 ~ "Up-regulated", logFC <= 0 & FDR <= 0.05 ~ "Down-regulated",TRUE ~ "Unchanged"))
+ggplot(data,aes(x=logFC,y=-log10(FDR), colour=Expression)) + geom_point(size=0.5) + scale_colour_manual(values = c("gray50","#2980b9","#c0392b"))  +
+  theme(legend.position="bottom",legend.title =  element_text(face="bold")) + guides(colour = guide_legend(override.aes = list(size=1.5))) +  xlim(-8, 8) + ylim(0,2.5) + geom_hline(yintercept = 1, linetype="longdash",colour="#A9A9A9", size=0.5)
+
+
+#DGE for Non-Cognate Donor vs PBS
+#DonorSCRAM vs PBS
+
+#contrast matrix
+DSPBS<-makeContrasts(condDonorScram-condPBS, levels=design)
+
+
+#comparing everything
+qlfDSPBS<-glmQLFTest(fit, contrast = DSPBS)
+resultsDSPBS <- topTags(qlfDSPBS, n=100000, adjust.method = "BH",p.value = 0.05)
+
+
+#getting direction for the DEGs
+mygenesDSPBS <- as.data.frame(resultsDSPBS)
+mygenesDSPBS$direction=ifelse(mygenesDSPBS$logFC>0,"up","down")
+
+
+#universe
+DSPBStt<-data.frame(topTags(qlfDSPBS,n=2000000))
+DSPBStt$direction=ifelse(DSPBStt$logFC>0,"up","down")
+DSPBStt$threshold <- ifelse(DSPBStt$FDR<0.05, "TRUE", "FALSE")
+
+#volcano plot for DS vs PBS
+dataDSPBS <- DSPBStt %>% mutate(Expression = case_when(logFC >= 0 & FDR <= 0.05 ~ "Up-regulated", logFC <= 0 & FDR <= 0.05 ~ "Down-regulated",TRUE ~ "Not Significant"))
+ggplot(dataDSPBS,aes(x=logFC,y=-log10(FDR), colour=Expression)) + geom_point(size=0.5) + scale_colour_manual(values = c("#2980b9","gray50","#c0392b"))  +
+  geom_text_repel(data=head(dataDSPBS,20),aes(label=SYMBOL)) + 
+  theme(legend.position="bottom",legend.title =  element_text(face="bold")) + guides(colour = guide_legend(override.aes = list(size=1.5)))  +  xlim(-12, 10)
+
+#Heatmap
+#Preparing heatmap data
+logcpm5 <- logcpm[, c(1, 2, 3, 7, 8, 9)]
+fcs5 <- logcpm5[rownames(mygenesDSPBS),]
+heatmapinfo5 <- d$samples
+heatmapinfo5 <- heatmapinfo5[c(1, 2, 3, 7, 8, 9),]
+heatmapinfo5 <- heatmapinfo5[order(heatmapinfo5$Vector),]
+
+names(heatmapinfo5)[1] <- "Vector"
+
+#Plotting heatmap
+pheatmap::pheatmap(fcs5, annotation_col = heatmapinfo5[1],scale="row", cluster_cols = FALSE, show_rownames=FALSE, gaps_col= c(3))
+
+
+#Pathway
+#Preparing pathway data
+foldchanges <- c(DSPBStt$ENTREZID, DSPBStt$logFC)
+gl <- DSPBStt[,"logFC"]
+names(gl) <- as.data.frame(DSPBStt[,"ENTREZID"])
+
+
+#Performing KEGG analysis
+my_keggDSPBS<-compareCluster(ENTREZID~direction,data=mygenesDSPBS,fun="enrichKEGG",organism="mmu",
+                             pvalueCutoff = 0.05,universe=DSPBStt$ENTREZID)
+data.frame(my_keggDSPBS) %>% group_by(direction) %>% slice_head(n=20) %>% mutate(log10FDR=ifelse(direction=='down',
+                                                                                             -(-log10(p.adjust)),-log10(p.adjust))) %>% arrange(direction,-p.adjust) %>% 
+  mutate(Description=factor(Description,levels=unique(Description))) %>% 
+  ggplot(aes(x=direction,y=Description,color=log10FDR, size = Count)) + geom_point() +
+  facet_wrap(~direction,scale='free_x') + scale_color_gradient2(low='dodgerblue4',mid='white',high="#FF0A04")+labs(colour="-log10(FDR)")
