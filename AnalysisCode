@@ -24,8 +24,6 @@ library(HGNChelper)
 library(clusterProfiler)
 library(reshape)
 
-setwd("C:/Users/maddy/Dropbox (Sydney Uni Student)/Results/Honours/Bioinformatics")
-
 #load samples object
 samples <- read_excel("Samples_cleaned.xlsx")
 
